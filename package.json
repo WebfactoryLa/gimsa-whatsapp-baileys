@@ -1,0 +1,20 @@
+{
+  "name": "gimsa-whatsapp-baileys",
+  "version": "1.0.0",
+  "description": "WhatsApp Web QR connection service for GIMSA Semáforo Comercial",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "qrcode": "^1.5.4",
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "@supabase/supabase-js": "^2.49.1",
+    "pino": "^9.6.0",
+    "dotenv": "^16.4.7",
+    "mime-types": "^2.1.35"
+  }
+}
