@@ -1,10 +1,24 @@
 /**
- * Supabase Sync — v2.1 FIXES
+ * Supabase Sync — v2.2 NOMBRES CORREGIDOS
  * 
- * Fixes:
- * - Guardar foto de perfil (avatar_url)
- * - Guardar media_url en mensajes
- * - Normalización de teléfonos
+ * Columnas exactas de Supabase:
+ * 
+ * reportia_eneache_wa_conversations:
+ *   id, wa_contact_id, phone, name, profile_pic_url, status,
+ *   window_open, window_expires_at, unread_count, last_message_at,
+ *   last_message_preview, assigned_to, opportunity_id, tags, metadata,
+ *   created_at, updated_at, linea_id, tipo_conexion, avatar_url
+ *
+ * reportia_eneache_wa_messages:
+ *   id, conversation_id, wa_message_id, direction, message_type,
+ *   content, media_url, media_mime_type, template_name, template_params,
+ *   sent_by, sent_by_user_id, status, error_message, ai_confidence,
+ *   metadata, created_at, linea_id
+ *
+ * reportia_eneache_wa_lineas:
+ *   id, nombre, descripcion, telefono, push_name, estado, color,
+ *   avatar_emoji, instancia_id, conectado_desde, ultimo_heartbeat,
+ *   orden, activa, created_at, updated_at
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -24,29 +38,33 @@ class SupabaseSync {
     console.log('✅ Supabase conectado');
   }
 
+  /**
+   * Buscar o crear conversación
+   */
   async getOrCreateConversation(phone, pushName, lineaId, profilePic) {
     if (!this.supabase) return { id: null };
 
+    // Buscar existente
     const { data: existing } = await this.supabase
       .from('reportia_eneache_wa_conversations')
       .select('*')
-      .eq('telefono', phone)
+      .eq('phone', phone)
       .eq('linea_id', lineaId)
-      .eq('estado', 'activa')
+      .eq('status', 'active')
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
     if (existing) {
       const updateData = {
-        ventana_abierta_hasta: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        ultimo_mensaje_at: new Date().toISOString(),
+        last_message_at: new Date().toISOString(),
+        window_open: true,
+        window_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        updated_at: new Date().toISOString(),
       };
-      if (pushName) {
-        updateData.nombre_push = pushName;
-        updateData.nombre_contacto = pushName;
-      }
+      if (pushName) updateData.name = pushName;
       if (profilePic) {
+        updateData.profile_pic_url = profilePic;
         updateData.avatar_url = profilePic;
       }
 
@@ -57,81 +75,124 @@ class SupabaseSync {
       return existing;
     }
 
+    // Crear nueva
     const { data: created, error } = await this.supabase
       .from('reportia_eneache_wa_conversations')
       .insert({
         wa_contact_id: phone,
-        telefono: phone,
-        nombre_contacto: pushName,
-        nombre_push: pushName,
+        phone: phone,
+        name: pushName || null,
+        profile_pic_url: profilePic || null,
         avatar_url: profilePic || null,
+        status: 'active',
+        window_open: true,
+        window_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        unread_count: 1,
+        last_message_at: new Date().toISOString(),
         linea_id: lineaId,
         tipo_conexion: 'qr',
-        estado: 'activa',
-        ventana_abierta_hasta: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        ultimo_mensaje_at: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error creando conversación:', error.message, error.details, error.hint);
+      throw error;
+    }
     console.log(`💬 Nueva conversación: +${phone} (${pushName}) en línea ${lineaId}`);
     return created;
   }
 
+  /**
+   * Guardar mensaje entrante
+   */
   async saveIncomingMessage(msg, lineaId) {
     if (!this.supabase) return null;
     const conversation = await this.getOrCreateConversation(
       msg.phone, msg.pushName, lineaId, msg.profilePic
     );
 
+    // Actualizar unread_count y preview
+    await this.supabase
+      .from('reportia_eneache_wa_conversations')
+      .update({
+        unread_count: (conversation.unread_count || 0) + 1,
+        last_message_preview: msg.content?.substring(0, 100) || `[${msg.type}]`,
+        last_message_at: new Date().toISOString(),
+      })
+      .eq('id', conversation.id);
+
     const { data, error } = await this.supabase
       .from('reportia_eneache_wa_messages')
       .insert({
-        conversacion_id: conversation.id,
+        conversation_id: conversation.id,
         linea_id: lineaId,
         wa_message_id: msg.messageId,
-        direccion: 'entrante',
-        tipo: msg.type,
-        contenido: msg.content,
+        direction: 'inbound',
+        message_type: msg.type,
+        content: msg.content || null,
         media_url: msg.mediaUrl || null,
-        media_mime: msg.mediaMime,
-        media_filename: msg.mediaFilename,
+        media_mime_type: msg.mediaMime || null,
+        sent_by: 'contact',
         status: 'received',
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error guardando mensaje entrante:', error.message, error.details, error.hint);
+      throw error;
+    }
     return { message: data, conversation };
   }
 
+  /**
+   * Guardar mensaje saliente
+   */
   async saveSentMessage(msg, lineaId) {
     if (!this.supabase) return null;
     const conversation = await this.getOrCreateConversation(msg.phone, null, lineaId, null);
 
+    // Actualizar preview
+    await this.supabase
+      .from('reportia_eneache_wa_conversations')
+      .update({
+        last_message_preview: msg.content?.substring(0, 100) || `[${msg.type}]`,
+        last_message_at: new Date().toISOString(),
+      })
+      .eq('id', conversation.id);
+
     const { data, error } = await this.supabase
       .from('reportia_eneache_wa_messages')
       .insert({
-        conversacion_id: conversation.id,
+        conversation_id: conversation.id,
         linea_id: lineaId,
         wa_message_id: msg.messageId,
-        direccion: 'saliente',
-        tipo: msg.type,
-        contenido: msg.content,
+        direction: 'outbound',
+        message_type: msg.type,
+        content: msg.content || null,
         media_url: msg.mediaUrl || null,
-        media_mime: msg.mediaMime || null,
-        media_filename: msg.mediaFilename || null,
+        media_mime_type: msg.mediaMime || null,
+        sent_by: msg.respondidoPor || 'agent',
         status: 'sent',
-        respondido_por: msg.respondidoPor || 'humano',
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      // Ignorar duplicados silenciosamente
+      if (error.code === '23505' || error.message?.includes('duplicate')) {
+        return null;
+      }
+      console.error('❌ Error guardando mensaje saliente:', error.message, error.details, error.hint);
+      throw error;
+    }
     return data;
   }
 
+  /**
+   * Actualizar status de mensaje
+   */
   async updateMessageStatus(messageId, status) {
     if (!this.supabase) return;
     await this.supabase
@@ -140,6 +201,9 @@ class SupabaseSync {
       .eq('wa_message_id', messageId);
   }
 
+  /**
+   * Actualizar estado de línea
+   */
   async updateLineaStatus(lineaId, status) {
     if (!this.supabase) return;
     await this.supabase
@@ -148,30 +212,38 @@ class SupabaseSync {
       .eq('id', lineaId);
   }
 
+  /**
+   * Obtener conversaciones
+   */
   async getConversations(lineaId, limit = 50) {
     if (!this.supabase) return [];
     let query = this.supabase
       .from('reportia_eneache_wa_conversations')
       .select('*')
       .eq('tipo_conexion', 'qr')
-      .eq('estado', 'activa')
-      .order('ultimo_mensaje_at', { ascending: false })
+      .in('status', ['active', 'open'])
+      .order('last_message_at', { ascending: false })
       .limit(limit);
 
     if (lineaId) query = query.eq('linea_id', lineaId);
 
-    const { data } = await query;
+    const { data, error } = await query;
+    if (error) console.error('Error obteniendo conversaciones:', error.message);
     return data || [];
   }
 
+  /**
+   * Obtener mensajes de una conversación
+   */
   async getMessages(conversationId, limit = 100) {
     if (!this.supabase) return [];
-    const { data } = await this.supabase
+    const { data, error } = await this.supabase
       .from('reportia_eneache_wa_messages')
       .select('*')
-      .eq('conversacion_id', conversationId)
+      .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(limit);
+    if (error) console.error('Error obteniendo mensajes:', error.message);
     return data || [];
   }
 }
