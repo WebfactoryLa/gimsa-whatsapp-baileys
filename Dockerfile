@@ -1,13 +1,14 @@
 FROM node:20-alpine
 
+RUN apk add --no-cache git
+
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --production
+RUN npm install --omit=dev
 
 COPY . .
 
-# Crear directorio para sesión de WhatsApp
 RUN mkdir -p auth/session
 
 EXPOSE 3100
