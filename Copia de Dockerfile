@@ -1,0 +1,17 @@
+FROM node:20-alpine
+
+# Baileys necesita git para algunas dependencias
+RUN apk add --no-cache git
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+COPY . .
+
+RUN mkdir -p auth/session
+
+EXPOSE 3100
+
+CMD ["npm", "start"]

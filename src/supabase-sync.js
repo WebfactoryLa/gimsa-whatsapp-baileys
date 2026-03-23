@@ -1,25 +1,28 @@
-/**
- * Supabase Sync
- * 
- * Sincroniza mensajes, conversaciones y leads con las tablas
- * reportia_eneache_* en Supabase.
- */
-
 const { createClient } = require('@supabase/supabase-js');
 
 class SupabaseSync {
   constructor() {
-    this.supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_KEY;
+
+    if (!url || !key) {
+      console.warn('⚠️  SUPABASE_URL o SUPABASE_SERVICE_KEY no configuradas.');
+      console.warn('⚠️  El servicio arranca sin Supabase. Solo WhatsApp funciona.');
+      console.warn('⚠️  Variables actuales:', {
+        SUPABASE_URL: url ? 'configurada' : 'FALTA',
+        SUPABASE_SERVICE_KEY: key ? 'configurada' : 'FALTA',
+      });
+      this.supabase = null;
+      return;
+    }
+
+    this.supabase = createClient(url, key);
+    console.log('✅ Supabase conectado');
   }
 
-  /**
-   * Buscar o crear conversación para un número de teléfono
-   */
   async getOrCreateConversation(phone, pushName) {
-    // Buscar existente
+    if (!this.supabase) return { id: null };
+
     const { data: existing } = await this.supabase
       .from('reportia_eneache_wa_conversaciones')
       .select('*')
@@ -30,7 +33,6 @@ class SupabaseSync {
       .single();
 
     if (existing) {
-      // Actualizar ventana de 24hs y último mensaje
       await this.supabase
         .from('reportia_eneache_wa_conversaciones')
         .update({
@@ -39,11 +41,9 @@ class SupabaseSync {
           nombre_push: pushName || existing.nombre_push,
         })
         .eq('id', existing.id);
-
       return existing;
     }
 
-    // Crear nueva
     const { data: created, error } = await this.supabase
       .from('reportia_eneache_wa_conversaciones')
       .insert({
@@ -59,16 +59,13 @@ class SupabaseSync {
       .single();
 
     if (error) throw error;
-    console.log(`💬 Nueva conversación creada: +${phone} (${pushName})`);
+    console.log(`💬 Nueva conversación: +${phone} (${pushName})`);
     return created;
   }
 
-  /**
-   * Guardar mensaje entrante
-   */
   async saveIncomingMessage(msg) {
+    if (!this.supabase) return null;
     const conversation = await this.getOrCreateConversation(msg.phone, msg.pushName);
-
     const { data, error } = await this.supabase
       .from('reportia_eneache_wa_mensajes')
       .insert({
@@ -85,17 +82,13 @@ class SupabaseSync {
       })
       .select()
       .single();
-
     if (error) throw error;
     return { message: data, conversation };
   }
 
-  /**
-   * Guardar mensaje saliente
-   */
   async saveSentMessage(msg) {
+    if (!this.supabase) return null;
     const conversation = await this.getOrCreateConversation(msg.phone, null);
-
     const { data, error } = await this.supabase
       .from('reportia_eneache_wa_mensajes')
       .insert({
@@ -112,84 +105,65 @@ class SupabaseSync {
       })
       .select()
       .single();
-
     if (error) throw error;
     return data;
   }
 
-  /**
-   * Actualizar status de mensaje (sent → delivered → read)
-   */
   async updateMessageStatus(update) {
-    const { error } = await this.supabase
+    if (!this.supabase) return;
+    await this.supabase
       .from('reportia_eneache_wa_mensajes')
       .update({ status: update.status })
       .eq('wa_message_id', update.messageId);
-
-    if (error) console.error('Error actualizando status:', error.message);
   }
 
-  /**
-   * Obtener conversaciones activas
-   */
   async getConversations(limit = 50) {
-    const { data, error } = await this.supabase
+    if (!this.supabase) return [];
+    const { data } = await this.supabase
       .from('reportia_eneache_wa_conversaciones')
       .select('*')
       .eq('estado', 'activa')
       .order('ultimo_mensaje_at', { ascending: false })
       .limit(limit);
-
-    if (error) throw error;
-    return data;
+    return data || [];
   }
 
-  /**
-   * Obtener mensajes de una conversación
-   */
   async getMessages(conversationId, limit = 100) {
-    const { data, error } = await this.supabase
+    if (!this.supabase) return [];
+    const { data } = await this.supabase
       .from('reportia_eneache_wa_mensajes')
       .select('*')
       .eq('conversacion_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(limit);
-
-    if (error) throw error;
-    return data;
+    return data || [];
   }
 
-  /**
-   * Crear oportunidad en el pipeline desde WhatsApp
-   */
   async createOpportunityFromChat(conversationId, data) {
+    if (!this.supabase) throw new Error('Supabase no configurado');
     const { data: opp, error } = await this.supabase
       .from('reportia_eneache_oportunidades')
       .insert({
-        comercial_id: null, // sin asignar, va al módulo de Asignación
+        comercial_id: null,
         empresa: data.empresa || 'Sin nombre (WhatsApp)',
         contacto_nombre: data.contacto_nombre || null,
-        contacto_cargo: data.contacto_cargo || null,
         cantidad_uniformes: data.cantidad_uniformes || 0,
         etapa: 'contacto_inicial',
         origen: 'entrante',
         fecha_primer_contacto: new Date().toISOString().split('T')[0],
         fecha_ultimo_contacto: new Date().toISOString().split('T')[0],
-        notas: `[WhatsApp] ${data.notas || 'Lead generado desde conversación de WhatsApp'}`,
+        notas: `[WhatsApp] ${data.notas || 'Lead desde WhatsApp'}`,
         activa: true,
       })
       .select()
       .single();
-
     if (error) throw error;
-
-    // Vincular conversación con la oportunidad
-    await this.supabase
-      .from('reportia_eneache_wa_conversaciones')
-      .update({ oportunidad_id: opp.id })
-      .eq('id', conversationId);
-
-    console.log(`🎯 Oportunidad creada desde WhatsApp: ${data.empresa} (${data.cantidad_uniformes} uniformes)`);
+    if (conversationId) {
+      await this.supabase
+        .from('reportia_eneache_wa_conversaciones')
+        .update({ oportunidad_id: opp.id })
+        .eq('id', conversationId);
+    }
     return opp;
   }
 }
