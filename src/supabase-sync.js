@@ -20,7 +20,7 @@ class SupabaseSync {
       .select('*')
       .eq('phone', phone)
       .eq('linea_id', lineaId)
-      .eq('status', 'active')
+      .in('status', ['active', 'activa'])
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
