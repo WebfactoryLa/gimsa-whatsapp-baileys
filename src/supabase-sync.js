@@ -28,7 +28,7 @@ class SupabaseSync {
     if (!this.supabase) return { id: null };
 
     const { data: existing } = await this.supabase
-      .from('reportia_eneache_wa_conversaciones')
+      .from('reportia_eneache_wa_conversations')
       .select('*')
       .eq('telefono', phone)
       .eq('linea_id', lineaId)
@@ -51,14 +51,14 @@ class SupabaseSync {
       }
 
       await this.supabase
-        .from('reportia_eneache_wa_conversaciones')
+        .from('reportia_eneache_wa_conversations')
         .update(updateData)
         .eq('id', existing.id);
       return existing;
     }
 
     const { data: created, error } = await this.supabase
-      .from('reportia_eneache_wa_conversaciones')
+      .from('reportia_eneache_wa_conversations')
       .insert({
         wa_contact_id: phone,
         telefono: phone,
@@ -86,7 +86,7 @@ class SupabaseSync {
     );
 
     const { data, error } = await this.supabase
-      .from('reportia_eneache_wa_mensajes')
+      .from('reportia_eneache_wa_messages')
       .insert({
         conversacion_id: conversation.id,
         linea_id: lineaId,
@@ -111,7 +111,7 @@ class SupabaseSync {
     const conversation = await this.getOrCreateConversation(msg.phone, null, lineaId, null);
 
     const { data, error } = await this.supabase
-      .from('reportia_eneache_wa_mensajes')
+      .from('reportia_eneache_wa_messages')
       .insert({
         conversacion_id: conversation.id,
         linea_id: lineaId,
@@ -135,7 +135,7 @@ class SupabaseSync {
   async updateMessageStatus(messageId, status) {
     if (!this.supabase) return;
     await this.supabase
-      .from('reportia_eneache_wa_mensajes')
+      .from('reportia_eneache_wa_messages')
       .update({ status })
       .eq('wa_message_id', messageId);
   }
@@ -151,7 +151,7 @@ class SupabaseSync {
   async getConversations(lineaId, limit = 50) {
     if (!this.supabase) return [];
     let query = this.supabase
-      .from('reportia_eneache_wa_conversaciones')
+      .from('reportia_eneache_wa_conversations')
       .select('*')
       .eq('tipo_conexion', 'qr')
       .eq('estado', 'activa')
@@ -167,7 +167,7 @@ class SupabaseSync {
   async getMessages(conversationId, limit = 100) {
     if (!this.supabase) return [];
     const { data } = await this.supabase
-      .from('reportia_eneache_wa_mensajes')
+      .from('reportia_eneache_wa_messages')
       .select('*')
       .eq('conversacion_id', conversationId)
       .order('created_at', { ascending: true })
