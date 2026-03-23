@@ -1,5 +1,10 @@
 /**
- * Supabase Sync — Multi-Línea
+ * Supabase Sync — v2.1 FIXES
+ * 
+ * Fixes:
+ * - Guardar foto de perfil (avatar_url)
+ * - Guardar media_url en mensajes
+ * - Normalización de teléfonos
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -11,7 +16,6 @@ class SupabaseSync {
 
     if (!url || !key) {
       console.warn('⚠️  SUPABASE_URL o SUPABASE_SERVICE_KEY no configuradas.');
-      console.warn('⚠️  El servicio arranca sin Supabase.');
       this.supabase = null;
       return;
     }
@@ -20,7 +24,7 @@ class SupabaseSync {
     console.log('✅ Supabase conectado');
   }
 
-  async getOrCreateConversation(phone, pushName, lineaId) {
+  async getOrCreateConversation(phone, pushName, lineaId, profilePic) {
     if (!this.supabase) return { id: null };
 
     const { data: existing } = await this.supabase
@@ -34,13 +38,21 @@ class SupabaseSync {
       .single();
 
     if (existing) {
+      const updateData = {
+        ventana_abierta_hasta: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        ultimo_mensaje_at: new Date().toISOString(),
+      };
+      if (pushName) {
+        updateData.nombre_push = pushName;
+        updateData.nombre_contacto = pushName;
+      }
+      if (profilePic) {
+        updateData.avatar_url = profilePic;
+      }
+
       await this.supabase
         .from('reportia_eneache_wa_conversaciones')
-        .update({
-          ventana_abierta_hasta: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-          ultimo_mensaje_at: new Date().toISOString(),
-          nombre_push: pushName || existing.nombre_push,
-        })
+        .update(updateData)
         .eq('id', existing.id);
       return existing;
     }
@@ -52,6 +64,7 @@ class SupabaseSync {
         telefono: phone,
         nombre_contacto: pushName,
         nombre_push: pushName,
+        avatar_url: profilePic || null,
         linea_id: lineaId,
         tipo_conexion: 'qr',
         estado: 'activa',
@@ -62,13 +75,15 @@ class SupabaseSync {
       .single();
 
     if (error) throw error;
-    console.log(`💬 Nueva conversación: +${phone} en línea ${lineaId}`);
+    console.log(`💬 Nueva conversación: +${phone} (${pushName}) en línea ${lineaId}`);
     return created;
   }
 
   async saveIncomingMessage(msg, lineaId) {
     if (!this.supabase) return null;
-    const conversation = await this.getOrCreateConversation(msg.phone, msg.pushName, lineaId);
+    const conversation = await this.getOrCreateConversation(
+      msg.phone, msg.pushName, lineaId, msg.profilePic
+    );
 
     const { data, error } = await this.supabase
       .from('reportia_eneache_wa_mensajes')
@@ -79,6 +94,7 @@ class SupabaseSync {
         direccion: 'entrante',
         tipo: msg.type,
         contenido: msg.content,
+        media_url: msg.mediaUrl || null,
         media_mime: msg.mediaMime,
         media_filename: msg.mediaFilename,
         status: 'received',
@@ -92,7 +108,7 @@ class SupabaseSync {
 
   async saveSentMessage(msg, lineaId) {
     if (!this.supabase) return null;
-    const conversation = await this.getOrCreateConversation(msg.phone, null, lineaId);
+    const conversation = await this.getOrCreateConversation(msg.phone, null, lineaId, null);
 
     const { data, error } = await this.supabase
       .from('reportia_eneache_wa_mensajes')
@@ -103,10 +119,11 @@ class SupabaseSync {
         direccion: 'saliente',
         tipo: msg.type,
         contenido: msg.content,
+        media_url: msg.mediaUrl || null,
         media_mime: msg.mediaMime || null,
         media_filename: msg.mediaFilename || null,
         status: 'sent',
-        respondido_por: 'humano',
+        respondido_por: msg.respondidoPor || 'humano',
       })
       .select()
       .single();

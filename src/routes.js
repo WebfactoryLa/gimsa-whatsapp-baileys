@@ -1,34 +1,26 @@
 /**
- * Rutas API — Multi-Línea
+ * Rutas API — v2.1 FIXES
+ * 
+ * Fixes:
+ * - Agregar endpoint /send/audio
  */
-
-const { v4: uuidv4 } = require('uuid');
 
 function setupRoutes(app, manager, sync) {
 
-  // ═══════════════════════════════════════════════════
-  // LÍNEAS — CRUD
-  // ═══════════════════════════════════════════════════
+  // ═══ LÍNEAS CRUD ═══
 
-  /**
-   * GET /api/lineas
-   * Lista todas las líneas con su estado actual
-   */
   app.get('/api/lineas', async (req, res) => {
     try {
       if (!sync.supabase) {
-        return res.json({ success: true, lineas: [], source: 'memory', statuses: manager.getAllStatus() });
+        return res.json({ success: true, lineas: [], statuses: manager.getAllStatus() });
       }
-
       const { data, error } = await sync.supabase
         .from('reportia_eneache_wa_lineas')
         .select('*')
         .eq('activa', true)
         .order('orden', { ascending: true });
-
       if (error) throw error;
 
-      // Enriquecer con estado en tiempo real del manager
       const lineas = (data || []).map(l => {
         const instance = l.instancia_id ? manager.get(l.instancia_id) : null;
         const liveStatus = instance ? instance.getStatus() : null;
@@ -40,29 +32,23 @@ function setupRoutes(app, manager, sync) {
           live_push_name: liveStatus?.pushName || l.push_name,
         };
       });
-
       res.json({ success: true, lineas });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  /**
-   * POST /api/lineas
-   * Crear nueva línea
-   * Body: { nombre, descripcion?, color?, avatar_emoji? }
-   */
   app.post('/api/lineas', async (req, res) => {
     try {
       const { nombre, descripcion, color, avatar_emoji } = req.body;
       if (!nombre) return res.status(400).json({ success: false, error: 'Se requiere nombre' });
 
+      const { v4: uuidv4 } = require('uuid');
       const instanciaId = 'wa_' + uuidv4().split('-')[0];
 
       if (!sync.supabase) {
-        // Sin Supabase, solo crear en memoria
         await manager.create(null, instanciaId);
-        return res.json({ success: true, linea: { instancia_id: instanciaId, nombre }, source: 'memory' });
+        return res.json({ success: true, linea: { instancia_id: instanciaId, nombre } });
       }
 
       const { data, error } = await sync.supabase
@@ -77,34 +63,25 @@ function setupRoutes(app, manager, sync) {
         })
         .select()
         .single();
-
       if (error) throw error;
 
-      // Crear instancia en el manager
       await manager.create(data.id, instanciaId);
-
       res.json({ success: true, linea: data });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  /**
-   * PUT /api/lineas/:id
-   * Editar línea
-   */
   app.put('/api/lineas/:id', async (req, res) => {
     try {
       const { nombre, descripcion, color, avatar_emoji } = req.body;
       if (!sync.supabase) return res.status(503).json({ success: false, error: 'Supabase no configurado' });
-
       const { data, error } = await sync.supabase
         .from('reportia_eneache_wa_lineas')
         .update({ nombre, descripcion, color, avatar_emoji, updated_at: new Date().toISOString() })
         .eq('id', req.params.id)
         .select()
         .single();
-
       if (error) throw error;
       res.json({ success: true, linea: data });
     } catch (err) {
@@ -112,53 +89,30 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * DELETE /api/lineas/:id
-   * Eliminar línea
-   */
   app.delete('/api/lineas/:id', async (req, res) => {
     try {
       if (!sync.supabase) return res.status(503).json({ success: false, error: 'Supabase no configurado' });
-
-      // Obtener instancia_id antes de borrar
       const { data: linea } = await sync.supabase
         .from('reportia_eneache_wa_lineas')
         .select('instancia_id')
         .eq('id', req.params.id)
         .single();
-
-      if (linea?.instancia_id) {
-        await manager.remove(linea.instancia_id);
-      }
-
-      await sync.supabase
-        .from('reportia_eneache_wa_lineas')
-        .update({ activa: false })
-        .eq('id', req.params.id);
-
+      if (linea?.instancia_id) await manager.remove(linea.instancia_id);
+      await sync.supabase.from('reportia_eneache_wa_lineas').update({ activa: false }).eq('id', req.params.id);
       res.json({ success: true, message: 'Línea eliminada' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // ═══════════════════════════════════════════════════
-  // CONEXIÓN POR LÍNEA
-  // ═══════════════════════════════════════════════════
+  // ═══ CONEXIÓN POR LÍNEA ═══
 
-  /**
-   * GET /api/lineas/:id/status
-   */
   app.get('/api/lineas/:id/status', async (req, res) => {
     try {
       const instanciaId = await _getInstanciaId(req.params.id);
       if (!instanciaId) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
       const instance = manager.get(instanciaId);
-      if (!instance) {
-        return res.json({ success: true, status: 'disconnected', phoneNumber: null, hasQr: false });
-      }
-
+      if (!instance) return res.json({ success: true, status: 'disconnected', phoneNumber: null, hasQr: false });
       const status = instance.getStatus();
       res.json({ success: true, ...status, hasQr: !!status.qr });
     } catch (err) {
@@ -166,61 +120,39 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * GET /api/lineas/:id/qr
-   */
   app.get('/api/lineas/:id/qr', async (req, res) => {
     try {
       const instanciaId = await _getInstanciaId(req.params.id);
       if (!instanciaId) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
       const instance = manager.get(instanciaId);
       if (!instance) return res.json({ status: 'disconnected', qr: null });
-
       const status = instance.getStatus();
-      if (status.status === 'connected') {
-        return res.json({ status: 'connected', qr: null, message: 'Ya conectado' });
-      }
-
-      res.json({ status: status.status, qr: status.qr, message: status.qr ? 'Escaneá el QR' : 'Esperá, generando QR...' });
+      if (status.status === 'connected') return res.json({ status: 'connected', qr: null });
+      res.json({ status: status.status, qr: status.qr, message: status.qr ? 'Escaneá el QR' : 'Generando QR...' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  /**
-   * POST /api/lineas/:id/connect
-   */
   app.post('/api/lineas/:id/connect', async (req, res) => {
     try {
       const instanciaId = await _getInstanciaId(req.params.id);
       if (!instanciaId) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
       let instance = manager.get(instanciaId);
-      if (!instance) {
-        instance = await manager.create(req.params.id, instanciaId);
-      }
-
+      if (!instance) instance = await manager.create(req.params.id, instanciaId);
       const status = instance.getStatus();
-      if (status.status === 'connected') {
-        return res.json({ success: true, message: 'Ya conectado' });
-      }
-
+      if (status.status === 'connected') return res.json({ success: true, message: 'Ya conectado' });
       await manager.connect(instanciaId);
-      res.json({ success: true, message: 'Conectando... consultá /api/lineas/' + req.params.id + '/qr' });
+      res.json({ success: true, message: 'Conectando...' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  /**
-   * POST /api/lineas/:id/disconnect
-   */
   app.post('/api/lineas/:id/disconnect', async (req, res) => {
     try {
       const instanciaId = await _getInstanciaId(req.params.id);
       if (!instanciaId) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
       await manager.disconnect(instanciaId);
       res.json({ success: true, message: 'Desconectado' });
     } catch (err) {
@@ -228,37 +160,24 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * POST /api/lineas/:id/reconnect
-   */
   app.post('/api/lineas/:id/reconnect', async (req, res) => {
     try {
       const instanciaId = await _getInstanciaId(req.params.id);
       if (!instanciaId) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
       await manager.reconnect(instanciaId);
-      res.json({ success: true, message: 'Reconectando con QR nuevo...' });
+      res.json({ success: true, message: 'Reconectando...' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // ═══════════════════════════════════════════════════
-  // MENSAJES POR LÍNEA
-  // ═══════════════════════════════════════════════════
+  // ═══ MENSAJES POR LÍNEA ═══
 
-  /**
-   * POST /api/lineas/:id/send/text
-   */
   app.post('/api/lineas/:id/send/text', async (req, res) => {
     try {
-      const instanciaId = await _getInstanciaId(req.params.id);
-      const instance = manager.get(instanciaId);
-      if (!instance) return res.status(404).json({ success: false, error: 'Línea no encontrada o no conectada' });
-
+      const instance = await _getInstance(req.params.id);
       const { phone, text } = req.body;
       if (!phone || !text) return res.status(400).json({ success: false, error: 'Se requiere phone y text' });
-
       const result = await instance.sendText(phone, text);
       res.json({ success: true, message: result });
     } catch (err) {
@@ -266,18 +185,11 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * POST /api/lineas/:id/send/image
-   */
   app.post('/api/lineas/:id/send/image', async (req, res) => {
     try {
-      const instanciaId = await _getInstanciaId(req.params.id);
-      const instance = manager.get(instanciaId);
-      if (!instance) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
+      const instance = await _getInstance(req.params.id);
       const { phone, image, caption, mimetype } = req.body;
       if (!phone || !image) return res.status(400).json({ success: false, error: 'Se requiere phone e image' });
-
       const buffer = Buffer.from(image, 'base64');
       const result = await instance.sendImage(phone, buffer, caption || '', mimetype || 'image/jpeg');
       res.json({ success: true, message: result });
@@ -286,18 +198,11 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * POST /api/lineas/:id/send/document
-   */
   app.post('/api/lineas/:id/send/document', async (req, res) => {
     try {
-      const instanciaId = await _getInstanciaId(req.params.id);
-      const instance = manager.get(instanciaId);
-      if (!instance) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
+      const instance = await _getInstance(req.params.id);
       const { phone, document, filename, mimetype, caption } = req.body;
       if (!phone || !document || !filename) return res.status(400).json({ success: false, error: 'Se requiere phone, document y filename' });
-
       const buffer = Buffer.from(document, 'base64');
       const result = await instance.sendDocument(phone, buffer, filename, mimetype || 'application/pdf', caption || '');
       res.json({ success: true, message: result });
@@ -306,18 +211,25 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * POST /api/lineas/:id/check-number
-   */
+  // NUEVO: Envío de audio como nota de voz
+  app.post('/api/lineas/:id/send/audio', async (req, res) => {
+    try {
+      const instance = await _getInstance(req.params.id);
+      const { phone, audio } = req.body;
+      if (!phone || !audio) return res.status(400).json({ success: false, error: 'Se requiere phone y audio (base64)' });
+      const buffer = Buffer.from(audio, 'base64');
+      const result = await instance.sendAudio(phone, buffer);
+      res.json({ success: true, message: result });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post('/api/lineas/:id/check-number', async (req, res) => {
     try {
-      const instanciaId = await _getInstanciaId(req.params.id);
-      const instance = manager.get(instanciaId);
-      if (!instance) return res.status(404).json({ success: false, error: 'Línea no encontrada' });
-
+      const instance = await _getInstance(req.params.id);
       const { phone } = req.body;
       if (!phone) return res.status(400).json({ success: false, error: 'Se requiere phone' });
-
       const result = await instance.checkNumber(phone);
       res.json({ success: true, ...result });
     } catch (err) {
@@ -325,13 +237,8 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  // ═══════════════════════════════════════════════════
-  // CONVERSACIONES
-  // ═══════════════════════════════════════════════════
+  // ═══ CONVERSACIONES ═══
 
-  /**
-   * GET /api/lineas/:id/conversations
-   */
   app.get('/api/lineas/:id/conversations', async (req, res) => {
     try {
       const data = await sync.getConversations(req.params.id, parseInt(req.query.limit) || 50);
@@ -341,9 +248,6 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * GET /api/conversations — todas las conversaciones QR (sin filtro de línea)
-   */
   app.get('/api/conversations', async (req, res) => {
     try {
       const data = await sync.getConversations(null, parseInt(req.query.limit) || 50);
@@ -353,9 +257,6 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  /**
-   * GET /api/conversations/:id/messages
-   */
   app.get('/api/conversations/:id/messages', async (req, res) => {
     try {
       const data = await sync.getMessages(req.params.id, parseInt(req.query.limit) || 100);
@@ -365,27 +266,22 @@ function setupRoutes(app, manager, sync) {
     }
   });
 
-  // ═══════════════════════════════════════════════════
-  // HEALTH
-  // ═══════════════════════════════════════════════════
+  // ═══ HEALTH ═══
 
   app.get('/health', (req, res) => {
     const statuses = manager.getAllStatus();
     const connected = Object.values(statuses).filter(s => s.status === 'connected').length;
-    const total = Object.keys(statuses).length;
-
     res.json({
       service: 'gimsa-whatsapp-baileys-multi',
+      version: '2.1.0',
       status: 'running',
-      instances: { total, connected },
+      instances: { total: Object.keys(statuses).length, connected },
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     });
   });
 
-  // ═══════════════════════════════════════════════════
-  // HELPERS
-  // ═══════════════════════════════════════════════════
+  // ═══ HELPERS ═══
 
   async function _getInstanciaId(lineaId) {
     if (!sync.supabase) return null;
@@ -395,6 +291,14 @@ function setupRoutes(app, manager, sync) {
       .eq('id', lineaId)
       .single();
     return data?.instancia_id || null;
+  }
+
+  async function _getInstance(lineaId) {
+    const instanciaId = await _getInstanciaId(lineaId);
+    if (!instanciaId) throw new Error('Línea no encontrada');
+    const instance = manager.get(instanciaId);
+    if (!instance) throw new Error('Línea no conectada');
+    return instance;
   }
 
   // Heartbeat cada 30 segundos
