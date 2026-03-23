@@ -76,7 +76,7 @@ class WhatsAppInstance {
       });
 
       this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
+        if (type !== 'notify' && type !== 'append') return;
         for (const msg of messages) {
           const jid = msg.key.remoteJid;
           if (!jid) continue;
